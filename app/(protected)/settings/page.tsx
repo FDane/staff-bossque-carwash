@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Globe, Moon, Sun, Monitor, LogOut, ChevronRight } from 'lucide-react';
+import { toast } from 'sonner';
 
 export default function SettingsPage() {
   const { logout } = useAuth();
@@ -18,7 +19,18 @@ export default function SettingsPage() {
 
   const handleLogout = async () => {
     await logout();
+    toast.success(t('logoutSuccess'));
     router.replace('/login');
+  };
+
+  const handleLanguageChange = (value: 'ms' | 'en') => {
+    setLanguage(value);
+    toast.success(t('languageChanged'));
+  };
+
+  const handleThemeChange = (value: string) => {
+    setTheme(value);
+    toast.success(t('themeChanged'));
   };
 
   const themeOptions = [

@@ -31,6 +31,8 @@ export const translations = {
     passwordMismatch: 'Kata laluan tidak sepadan',
     resetRequested: 'Permintaan tetapan semula kata laluan telah dihantar kepada pemilik',
     resetDescription: 'Sila hubungi pemilik untuk menetapkan semula kata laluan anda',
+    loginSuccess: 'Log masuk berjaya! Selamat datang',
+    logoutSuccess: 'Log keluar berjaya',
 
     // Navigation
     dashboard: 'Papan Pemuka',
@@ -112,6 +114,9 @@ export const translations = {
     systemMode: 'Ikut Sistem',
     malay: 'Bahasa Melayu',
     english: 'English',
+    languageChanged: 'Bahasa berjaya ditukar',
+    themeChanged: 'Tema berjaya ditukar',
+    payslipDownloaded: 'Slip gaji berjaya dimuat turun',
 
     // Months
     january: 'Januari',
@@ -168,6 +173,8 @@ export const translations = {
     passwordMismatch: 'Passwords do not match',
     resetRequested: 'Password reset request has been sent to the owner',
     resetDescription: 'Please contact the owner to reset your password',
+    loginSuccess: 'Login successful! Welcome',
+    logoutSuccess: 'Logout successful',
 
     // Navigation
     dashboard: 'Dashboard',
@@ -249,6 +256,9 @@ export const translations = {
     systemMode: 'System',
     malay: 'Bahasa Melayu',
     english: 'English',
+    languageChanged: 'Language changed successfully',
+    themeChanged: 'Theme changed successfully',
+    payslipDownloaded: 'Payslip downloaded successfully',
 
     // Months
     january: 'January',

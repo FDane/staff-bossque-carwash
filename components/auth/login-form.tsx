@@ -30,6 +30,7 @@ export function LoginForm() {
     setIsLoading(true);
     try {
       await login(icNumber, password, rememberMe);
+      toast.success(t('loginSuccess'));
       router.replace('/dashboard');
     } catch {
       toast.error(t('loginError'));
