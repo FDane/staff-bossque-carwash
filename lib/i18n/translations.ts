@@ -26,6 +26,7 @@ export const translations = {
     currentPassword: 'Kata Laluan Semasa',
     newPassword: 'Kata Laluan Baru',
     confirmPassword: 'Sahkan Kata Laluan Baru',
+    loginSuccess: 'Log masuk berjaya!',
     loginError: 'Nombor IC atau kata laluan salah',
     passwordChanged: 'Kata laluan berjaya ditukar',
     passwordMismatch: 'Kata laluan tidak sepadan',
@@ -61,6 +62,9 @@ export const translations = {
     time: 'Masa',
     photo: 'Foto',
     noAttendance: 'Tiada rekod kehadiran',
+    cameraPermissionDenied: 'Akses kamera ditolak. Sila benarkan akses di tetapan pelayar.',
+    cameraNotFound: 'Kamera tidak dijumpai pada peranti anda.',
+    cameraNotSupported: 'Kamera tidak disokong pada pelayar ini atau sambungan tidak selamat (HTTPS diperlukan).',
 
     // Leave
     leaveApplication: 'Permohonan Cuti',
@@ -163,6 +167,7 @@ export const translations = {
     currentPassword: 'Current Password',
     newPassword: 'New Password',
     confirmPassword: 'Confirm New Password',
+    loginSuccess: 'Login successful!',
     loginError: 'Invalid IC number or password',
     passwordChanged: 'Password changed successfully',
     passwordMismatch: 'Passwords do not match',
@@ -198,6 +203,9 @@ export const translations = {
     time: 'Time',
     photo: 'Photo',
     noAttendance: 'No attendance records',
+    cameraPermissionDenied: 'Camera access denied. Please allow access in browser settings.',
+    cameraNotFound: 'Camera not found on your device.',
+    cameraNotSupported: 'Camera is not supported on this browser or the connection is insecure (HTTPS required).',
 
     // Leave
     leaveApplication: 'Leave Application',

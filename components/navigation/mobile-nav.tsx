@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useLanguage } from '@/contexts/language-context';
 import { cn } from '@/lib/utils';
@@ -63,8 +64,14 @@ export function TopBar() {
     <header className="sticky top-0 z-40 border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
       <div className="flex h-14 items-center justify-between px-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-            <span className="text-sm font-bold text-primary-foreground">CW</span>
+          <div className="flex h-8 w-8 items-center justify-center">
+            <Image
+              src="/logo.png"
+              alt="Logo"
+              width={32}
+              height={32}
+              className="object-contain"
+            />
           </div>
           <h1 className="text-lg font-semibold">{getPageTitle()}</h1>
         </div>

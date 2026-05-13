@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/auth-context';
 import { useLanguage } from '@/contexts/language-context';
@@ -29,9 +30,12 @@ export function LoginForm() {
 
     setIsLoading(true);
     try {
-      await login(icNumber, password, rememberMe);
+      const result = await login(icNumber, password, rememberMe);
+      console.log('Login success:', result);
+      toast.success(t('loginSuccess'));
       router.replace('/dashboard');
-    } catch {
+    } catch (error) {
+      console.error('Login failed:', error);
       toast.error(t('loginError'));
     } finally {
       setIsLoading(false);
@@ -41,8 +45,15 @@ export function LoginForm() {
   return (
     <Card className="w-full max-w-md border-0 shadow-xl">
       <CardHeader className="space-y-1 text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary">
-          <span className="text-2xl font-bold text-primary-foreground">CW</span>
+        <div className="mx-auto mb-4 flex justify-center">
+          <Image
+            src="/logo.png"
+            alt="Bossque Carwash Logo"
+            width={80}
+            height={80}
+            className="object-contain"
+            priority
+          />
         </div>
         <CardTitle className="text-2xl font-bold">{t('login')}</CardTitle>
         <CardDescription>{t('appName')}</CardDescription>
@@ -54,7 +65,7 @@ export function LoginForm() {
             <Input
               id="icNumber"
               type="text"
-              placeholder="000000-00-0000"
+              placeholder="900101-01-1234 "
               value={icNumber}
               onChange={(e) => setIcNumber(e.target.value)}
               required

@@ -65,6 +65,22 @@ export default function AttendancePage() {
     fetchAttendance();
   }, [fetchAttendance]);
 
+  // Effect to attach stream to video element when it becomes available
+  useEffect(() => {
+    if (showCamera && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [showCamera]);
+
+  // Cleanup camera tracks when component unmounts
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -76,18 +92,26 @@ export default function AttendancePage() {
   };
 
   const startCamera = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast.error(t('cameraNotSupported'));
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } 
       });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
       setShowCamera(true);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error accessing camera:', error);
-      toast.error('Cannot access camera');
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        toast.error(t('cameraPermissionDenied'));
+      } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+        toast.error(t('cameraNotFound'));
+      } else {
+        toast.error(t('error'));
+      }
     }
   };
 

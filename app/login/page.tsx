@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/auth-context';
 import { LoginForm } from '@/components/auth/login-form';
 import { Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { translations } from '@/lib/i18n/translations';
 
 export default function LoginPage() {
   const { user, loading } = useAuth();
@@ -12,6 +14,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!loading && user) {
+      // Note: Success toast is now handled inside LoginForm for better responsiveness
       router.replace('/dashboard');
     }
   }, [user, loading, router]);

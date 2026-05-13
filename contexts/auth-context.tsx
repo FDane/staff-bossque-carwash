@@ -24,14 +24,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    console.log("Auth: Initializing listener...");
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      console.log("Auth: State changed, user found:", !!fbUser);
       setFirebaseUser(fbUser);
       if (fbUser) {
-        // Fetch user data from Firestore
-        const userDoc = await getDoc(doc(db, 'users', fbUser.uid));
-        if (userDoc.exists()) {
-          setUser({ id: userDoc.id, ...userDoc.data() } as User);
-        } else {
+        try {
+          // Fetch user data from Firestore
+          const userDoc = await getDoc(doc(db, 'staff', fbUser.uid));
+          if (userDoc.exists()) {
+            setUser({ id: userDoc.id, ...userDoc.data() } as User);
+          } else {
+            setUser(null);
+          }
+        } catch (error) {
+          console.error("Firestore permission error:", error);
           setUser(null);
         }
       } else {
