@@ -1,17 +1,17 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '@/contexts/auth-context';
 import { useLanguage } from '@/contexts/language-context';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { collection, addDoc, query, where, getDocs, orderBy, Timestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { collection, addDoc, query, where, getDocs, orderBy, Timestamp, doc, updateDoc, setDoc, deleteDoc as deleteFirestoreDoc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL, deleteObject, StorageReference } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase';
-import { format } from 'date-fns';
+import { format, startOfDay, setHours, setMinutes, differenceInMinutes } from 'date-fns';
 import { Camera, Upload, CheckCircle, Clock, Image as ImageIcon, X } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Attendance } from '@/lib/types';
+import type { Attendance, DailySalary, Advance } from '@/lib/types';
 
 export default function AttendancePage() {
   const { user } = useAuth();
@@ -26,6 +26,7 @@ export default function AttendancePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [isClockingOut, setIsClockingOut] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
 
   const fetchAttendance = useCallback(async () => {
@@ -152,6 +153,107 @@ export default function AttendancePage() {
     }
   };
 
+  const calculateDailyEarnings = useCallback(async (
+    staffId: string,
+    dateStr: string,
+    clockInTime: Date,
+    clockOutTime?: Date | null,
+    initialCarCount: number = 0,
+    initialAdvancesDeducted: number = 0
+  ) => {
+    let baseSalary = Number(user?.dailySalary) || 0;
+    let carCount = initialCarCount;
+    let penalty = 0;
+    let bonus = 0;
+    let advancesDeducted = initialAdvancesDeducted;
+
+    // Fetch current car count from daily_stats if not provided
+    if (initialCarCount === 0) {
+      const statsQuery = query(collection(db, 'daily_stats'), where('date', '==', dateStr));
+      const statsSnapshot = await getDocs(statsQuery);
+      if (!statsSnapshot.empty) {
+        carCount = statsSnapshot.docs[0].data().totalCars || 0;
+      }
+    }
+
+    // Apply salary tiers
+    if (user?.salaryTiers && typeof user.salaryTiers === 'object') {
+      console.log("Attendance: Checking tiers for car count:", carCount);
+      let tieredSalary: number | undefined;
+
+      if (Array.isArray(user.salaryTiers)) {
+        const index = Math.floor(carCount / 10);
+        const tierIndex = Math.max(0, Math.min(index, user.salaryTiers.length - 1));
+        tieredSalary = user.salaryTiers[tierIndex];
+      } else {
+        // Handle Map/Object structure: { t1: 40, t2: 50, ... }
+        const tierNumber = Math.min(Math.floor(carCount / 10) + 1, 5);
+        const tierKey = `t${tierNumber}`;
+        tieredSalary = (user.salaryTiers as any)[tierKey];
+        console.log(`Attendance: Map detected. Accessing key [${tierKey}] -> Result: RM${tieredSalary}`);
+      }
+
+      if (tieredSalary !== undefined && tieredSalary !== null) {
+        baseSalary = Number(tieredSalary);
+      }
+    }
+
+    // Fetch advances if not provided
+    if (initialAdvancesDeducted === 0) {
+      const advancesQuery = query(
+        collection(db, 'advances'),
+        where('staffId', '==', staffId),
+        where('date', '==', dateStr)
+      );
+      const advancesSnapshot = await getDocs(advancesQuery);
+      advancesDeducted = advancesSnapshot.docs.reduce((sum, doc) => sum + (doc.data() as Advance).amount, 0);
+    }
+
+    // Lateness check (9:00 AM start, 10 min grace)
+    const workStart = setHours(setMinutes(startOfDay(clockInTime), 0), 9);
+    const minutesLate = differenceInMinutes(clockInTime, workStart);
+    if (minutesLate >= 10) { // RM0.10 deduction starts at 10 minutes late
+      penalty = Math.floor(minutesLate / 10) * 0.50;
+    }
+
+    // Early Leave and Overtime check
+    if (clockOutTime) {
+      const workEnd = setHours(setMinutes(startOfDay(clockOutTime), 0), 18); // 6:00 PM
+      const otStart = setHours(setMinutes(startOfDay(clockOutTime), 30), 18); // 6:30 PM
+
+      if (clockOutTime < workEnd) {
+        // Early leave penalty: RM0.50 for every 10 mins early
+        const minutesEarly = differenceInMinutes(workEnd, clockOutTime);
+        penalty += Math.floor(minutesEarly / 10) * 0.50;
+      } else if (clockOutTime >= otStart) {
+        // Overtime bonus: RM0.50 for every 10 mins after 6:30 PM
+        const minutesOT = differenceInMinutes(clockOutTime, otStart);
+        bonus = Math.floor(minutesOT / 10) * 0.50;
+      }
+    }
+
+    const totalEarnings = baseSalary - penalty + bonus - advancesDeducted;
+
+    const result: any = {
+      staffId,
+      date: dateStr,
+      baseSalary,
+      carCount,
+      penalty,
+      bonus,
+      advancesDeducted,
+      totalEarnings,
+      clockInTime: Timestamp.fromDate(clockInTime),
+      lastUpdatedAt: Timestamp.now(),
+    };
+
+    if (clockOutTime) {
+      result.clockOutTime = Timestamp.fromDate(clockOutTime);
+    }
+
+    return result;
+  }, [user]);
+
   const handleClockIn = async () => {
     if (!user || !selectedImage) return;
     if (todayAttendance) {
@@ -160,18 +262,41 @@ export default function AttendancePage() {
     }
 
     setUploading(true);
+    let uploadedImageRef: StorageReference | null = null; // To keep track of the uploaded image for cleanup
     try {
-      // Upload image to Firebase Storage
-      const imageRef = ref(storage, `attendance/${user.id}/${Date.now()}.jpg`);
+      const today = format(new Date(), 'yyyy-MM-dd');
+      const clockInTimestamp = Timestamp.now();
+      const dailySalaryId = `${user.id}_${today}`;
+
+      // 1. Upload image to Firebase Storage first
+      const imageRef = ref(storage, `attendance/${today}_${user.id}.jpg`);
       await uploadBytes(imageRef, selectedImage);
+      uploadedImageRef = imageRef; // Store reference for potential cleanup
       const imageUrl = await getDownloadURL(imageRef);
 
-      // Save attendance record
-      const today = format(new Date(), 'yyyy-MM-dd');
+      // Calculate initial daily salary (T1, 0 cars, current advances)
+      const initialDailySalaryData = await calculateDailyEarnings(
+        user.id,
+        today,
+        clockInTimestamp.toDate(),
+        null, // No clock out time yet
+        0, // Initial car count is 0
+        0 // Advances will be fetched by calculateDailyEarnings
+      );
+
+      console.log("Attendance: Initial Salary Record for Clock-in:", initialDailySalaryData);
+
+      // 2. Create daily_salaries record
+      await setDoc(doc(db, 'daily_salaries', dailySalaryId), { 
+        ...initialDailySalaryData, 
+        id: dailySalaryId 
+      });
+
+      // 3. Save attendance record
       await addDoc(collection(db, 'attendance'), {
         staffId: user.id,
         date: today,
-        clockInTime: Timestamp.now(),
+        clockInTime: clockInTimestamp,
         imageUrl,
         createdAt: Timestamp.now(),
       });
@@ -182,10 +307,59 @@ export default function AttendancePage() {
     } catch (error) {
       console.error('Error clocking in:', error);
       toast.error(t('error'));
+
+      // If an image was uploaded but Firestore operations failed, delete the image
+      if (uploadedImageRef) {
+        try {
+          await deleteObject(uploadedImageRef);
+          console.log('Successfully deleted orphaned image from storage.');
+        } catch (deleteError) {
+          console.error('Failed to delete orphaned image from storage:', deleteError);
+        }
+      }
     } finally {
       setUploading(false);
     }
   };
+
+  const handleClockOut = async () => {
+    if (!user || !todayAttendance || todayAttendance.clockOutTime) return;
+
+    setIsClockingOut(true);
+    try {
+      const clockOutTimestamp = Timestamp.now();
+      const today = format(new Date(), 'yyyy-MM-dd');
+
+      // Update attendance record with clock out time
+      const attendanceDocRef = doc(db, 'attendance', todayAttendance.id);
+      await updateDoc(attendanceDocRef, {
+        clockOutTime: clockOutTimestamp,
+        updatedAt: Timestamp.now(),
+      });
+
+      // Recalculate and update daily salary record
+      const dailySalaryDocRef = doc(db, 'daily_salaries', `${user.id}_${today}`);
+      const dailySalaryData = await calculateDailyEarnings(
+        user.id,
+        today,
+        todayAttendance.clockInTime.toDate(),
+        clockOutTimestamp.toDate()
+      );
+      await updateDoc(dailySalaryDocRef, dailySalaryData);
+
+      toast.success(t('clockOutSuccess')); 
+      fetchAttendance(); 
+    } catch (error) {
+      console.error('Error clocking out:', error);
+      toast.error(t('error'));
+    } finally {
+      setIsClockingOut(false);
+    }
+  };
+
+  const showClockOutButton = useMemo(() => {
+    return todayAttendance && !todayAttendance.clockOutTime;
+  }, [todayAttendance]);
 
   return (
     <div className="p-4 space-y-6">
@@ -277,6 +451,28 @@ export default function AttendancePage() {
                 </Button>
               </div>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Clock Out Section */}
+      {showClockOutButton && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5 text-primary" />
+              {t('clockOut')} {/* Assuming you add this translation key */}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Button
+              onClick={handleClockOut}
+              className="w-full gap-2"
+              disabled={isClockingOut}
+            >
+              {isClockingOut ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" /> : <Clock className="h-4 w-4" />}
+              {isClockingOut ? t('loading') : t('clockOut')}
+            </Button>
           </CardContent>
         </Card>
       )}

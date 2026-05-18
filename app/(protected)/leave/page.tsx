@@ -73,7 +73,7 @@ export default function LeavePage() {
         startDate,
         endDate,
         reason,
-        status: 'approved', // Auto-approve since no admin panel
+        status: 'pending', // Auto-approve since no admin panel
         createdAt: Timestamp.now(),
       });
 

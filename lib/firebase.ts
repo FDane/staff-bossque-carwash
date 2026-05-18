@@ -20,7 +20,7 @@ export const db = getFirestore(app);
 export const storage = getStorage(app);
 
 // Helper to convert IC number to internal email format
-export const icToEmail = (icNumber: string) => `${icNumber}@carwash.local`;
+export const icToEmail = (icNumber: string) => `${icNumber}@bossque.carwash`;
 
 // Helper to set auth persistence based on "Remember Me" option
 export const setAuthPersistence = async (rememberMe: boolean) => {

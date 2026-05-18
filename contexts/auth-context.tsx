@@ -10,10 +10,10 @@ interface AuthContextType {
   user: User | null;
   firebaseUser: FirebaseUser | null;
   loading: boolean;
-  login: (icNumber: string, password: string, rememberMe: boolean) => Promise<void>;
+  login: (nric: string, password: string, rememberMe: boolean) => Promise<void>;
   logout: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
-  requestPasswordReset: (icNumber: string) => Promise<void>;
+  requestPasswordReset: (nric: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -31,10 +31,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (fbUser) {
         try {
           // Fetch user data from Firestore
-          const userDoc = await getDoc(doc(db, 'staff', fbUser.uid));
-          if (userDoc.exists()) {
-            setUser({ id: userDoc.id, ...userDoc.data() } as User);
+          const userDoc = await getDoc(doc(db, 'users', fbUser.uid));
+          const userData = userDoc.data();
+          if (userDoc.exists()) { 
+            setUser({ id: userDoc.id, ...userData } as User);
           } else {
+            await signOut(auth);
             setUser(null);
           }
         } catch (error) {
@@ -50,10 +52,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, []);
 
-  const login = async (icNumber: string, password: string, rememberMe: boolean) => {
+  const login = async (nric: string, password: string, rememberMe: boolean) => {
     await setAuthPersistence(rememberMe);
-    const email = icToEmail(icNumber);
-    await signInWithEmailAndPassword(auth, email, password);
+    const email = icToEmail(nric);
+    console.log(`Login: Attempting login for IC [${nric}] using email [${email}] (without isStaff check)`);
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    
+    // Validate if the user has a corresponding document in the 'users' collection
+    const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
+    const userData = userDoc.data();
+    
+    // console.log(`Login: User UID [${userCredential.user.uid}] - isStaff:`, userData?.isStaff); // Removed or commented out
+    if (!userDoc.exists()) { // Removed `|| userData?.isStaff !== true`
+      await signOut(auth);
+      throw new Error('Unauthorized: User record not found in database.'); // Updated error message
+    }
   };
 
   const logout = async () => {
@@ -65,17 +78,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!firebaseUser || !user) throw new Error('Not authenticated');
     
     // Re-authenticate user first
-    const email = icToEmail(user.icNumber);
+    const email = icToEmail(user.nric);
     await signInWithEmailAndPassword(auth, email, currentPassword);
     
     // Update password
     await updatePassword(firebaseUser, newPassword);
   };
 
-  const requestPasswordReset = async (icNumber: string) => {
+  const requestPasswordReset = async (nric: string) => {
     // Create a password reset request in Firestore for the owner to handle
     await addDoc(collection(db, 'password_resets'), {
-      icNumber,
+      nric,
       requestedAt: Timestamp.now(),
       status: 'pending',
     });

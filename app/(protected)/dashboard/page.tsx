@@ -7,16 +7,17 @@ import { useLanguage } from '@/contexts/language-context';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, limit, doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { format } from 'date-fns';
 import { Clock, CalendarDays, Wallet, CheckCircle, XCircle, Camera } from 'lucide-react';
-import type { Attendance } from '@/lib/types';
+import type { Attendance, DailySalary } from '@/lib/types';
 
 export default function DashboardPage() {
   const { user } = useAuth();
   const { t } = useLanguage();
   const [todayAttendance, setTodayAttendance] = useState<Attendance | null>(null);
+  const [todaySalary, setTodaySalary] = useState<DailySalary | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -24,20 +25,28 @@ export default function DashboardPage() {
       if (!user) return;
       
       const today = format(new Date(), 'yyyy-MM-dd');
-      const q = query(
-        collection(db, 'attendance'),
-        where('staffId', '==', user.id),
-        where('date', '==', today),
-        limit(1)
-      );
       
       try {
-        const snapshot = await getDocs(q);
+        // Fetch today's attendance
+        const attQuery = query(
+          collection(db, 'attendance'),
+          where('staffId', '==', user.id),
+          where('date', '==', today),
+          limit(1)
+        );
+        const snapshot = await getDocs(attQuery);
         if (!snapshot.empty) {
           setTodayAttendance({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as Attendance);
         }
+
+        // Fetch today's salary record
+        const salaryDocRef = doc(db, 'daily_salaries', `${user.id}_${today}`);
+        const salaryDoc = await getDoc(salaryDocRef);
+        if (salaryDoc.exists()) {
+          setTodaySalary({ id: salaryDoc.id, ...salaryDoc.data() } as DailySalary);
+        }
       } catch (error) {
-        console.error('Error fetching attendance:', error);
+        console.error('Error fetching dashboard data:', error);
       } finally {
         setLoading(false);
       }
@@ -160,7 +169,7 @@ export default function DashboardPage() {
             <div>
               <p className="text-sm text-muted-foreground">{t('dailySalary')}</p>
               <p className="text-lg font-bold">
-                RM {user?.dailySalary?.toFixed(2) || '0.00'}
+                RM {todaySalary ? todaySalary.totalEarnings.toFixed(2) : '0.00'}
               </p>
             </div>
           </div>

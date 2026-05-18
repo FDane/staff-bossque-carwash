@@ -1,18 +1,21 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import Link from 'next/link';
+import Cropper from 'react-easy-crop';
 import { useAuth } from '@/contexts/auth-context';
 import { useLanguage } from '@/contexts/language-context';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Slider } from '@/components/ui/slider';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { doc, updateDoc, Timestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase';
-import { User, Phone, MapPin, Briefcase, Building, CreditCard, Camera, Lock, ChevronRight } from 'lucide-react';
+import { User, Phone, MapPin, Briefcase, Building, CreditCard, Camera, Lock, ChevronRight, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function ProfilePage() {
@@ -25,10 +28,17 @@ export default function ProfilePage() {
   
   // Form state
   const [name, setName] = useState(user?.name || '');
+  const [nric, setNric] = useState(user?.nric || '');
   const [phone, setPhone] = useState(user?.phone || '');
   const [address, setAddress] = useState(user?.address || '');
   const [bankName, setBankName] = useState(user?.bankName || '');
   const [bankAccount, setBankAccount] = useState(user?.bankAccount || '');
+
+  // Cropping state
+  const [imageToCrop, setImageToCrop] = useState<string | null>(null);
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
 
   const handleSave = async () => {
     if (!user || !firebaseUser) return;
@@ -37,6 +47,7 @@ export default function ProfilePage() {
     try {
       await updateDoc(doc(db, 'users', firebaseUser.uid), {
         name,
+        nric,
         phone,
         address,
         bankName,
@@ -57,19 +68,43 @@ export default function ProfilePage() {
     const file = e.target.files?.[0];
     if (!file || !user || !firebaseUser) return;
 
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png'];
+    if (!allowedTypes.includes(file.type)) {
+      toast.error('Only JPEG, JPG, and PNG images are allowed');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImageToCrop(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = ''; // Reset input to allow picking same file again
+  };
+
+  const onCropComplete = useCallback((_croppedArea: any, croppedAreaPixels: any) => {
+    setCroppedAreaPixels(croppedAreaPixels);
+  }, []);
+
+  const handleCropSave = async () => {
+    if (!imageToCrop || !croppedAreaPixels || !user || !firebaseUser) return;
+
     setUploading(true);
     try {
-      const imageRef = ref(storage, `profiles/${firebaseUser.uid}/${Date.now()}.jpg`);
-      await uploadBytes(imageRef, file);
+      const croppedBlob = await getCroppedImg(imageToCrop, croppedAreaPixels);
+      const imageRef = ref(storage, `profiles/${user.nric}`);
+      await uploadBytes(imageRef, croppedBlob);
       const imageUrl = await getDownloadURL(imageRef);
-      
+
       await updateDoc(doc(db, 'users', firebaseUser.uid), {
         profileImage: imageUrl,
         updatedAt: Timestamp.now(),
       });
-      
+
       toast.success(t('profileUpdated'));
-      // Force refresh by reloading
+      setImageToCrop(null);
+      // Force refresh to update all avatar instances
       window.location.reload();
     } catch (error) {
       console.error('Error uploading image:', error);
@@ -81,6 +116,7 @@ export default function ProfilePage() {
 
   const handleCancel = () => {
     setName(user?.name || '');
+    setNric(user?.nric || '');
     setPhone(user?.phone || '');
     setAddress(user?.address || '');
     setBankName(user?.bankName || '');
@@ -90,7 +126,7 @@ export default function ProfilePage() {
 
   const profileFields = [
     { icon: User, label: t('name'), value: name, setValue: setName, editable: true },
-    { icon: CreditCard, label: t('icNumber'), value: user?.icNumber || '', editable: false },
+    { icon: CreditCard, label: t('nric'), value: user?.nric || '', editable: false },
     { icon: Phone, label: t('phone'), value: phone, setValue: setPhone, editable: true },
     { icon: MapPin, label: t('address'), value: address, setValue: setAddress, editable: true },
     { icon: Briefcase, label: t('position'), value: user?.position || '', editable: false },
@@ -112,7 +148,7 @@ export default function ProfilePage() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept=".jpeg,.jpg,.png"
             onChange={handleImageUpload}
             className="hidden"
           />
@@ -202,6 +238,70 @@ export default function ProfilePage() {
           </CardContent>
         </Card>
       </Link>
+
+      {/* Image Cropper Dialog */}
+      <Dialog open={!!imageToCrop} onOpenChange={() => !uploading && setImageToCrop(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('edit')}</DialogTitle>
+          </DialogHeader>
+          <div className="relative h-64 w-full bg-muted overflow-hidden rounded-md">
+            <Cropper
+              image={imageToCrop || ''}
+              crop={crop}
+              zoom={zoom}
+              aspect={1}
+              onCropChange={setCrop}
+              onZoomChange={setZoom}
+              onCropComplete={onCropComplete}
+            />
+          </div>
+          <div className="space-y-2 py-4">
+            <Label>Zoom</Label>
+            <Slider
+              value={[zoom]}
+              min={1}
+              max={3}
+              step={0.1}
+              onValueChange={(val) => setZoom(val[0])}
+            />
+          </div>
+          <DialogFooter className="flex gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setImageToCrop(null)} disabled={uploading} className="flex-1">
+              {t('cancel')}
+            </Button>
+            <Button onClick={handleCropSave} disabled={uploading} className="flex-1">
+              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : t('save')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
+}
+
+// Cropping Helper Functions
+const createImage = (url: string): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    image.addEventListener('load', () => resolve(image));
+    image.addEventListener('error', (error) => reject(error));
+    image.setAttribute('crossOrigin', 'anonymous');
+    image.src = url;
+  });
+
+async function getCroppedImg(imageSrc: string, pixelCrop: any): Promise<Blob> {
+  const image = await createImage(imageSrc);
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('No 2d context');
+  canvas.width = pixelCrop.width;
+  canvas.height = pixelCrop.height;
+  ctx.drawImage(image, pixelCrop.x, pixelCrop.y, pixelCrop.width, pixelCrop.height, 0, 0, pixelCrop.width, pixelCrop.height);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) return reject(new Error('Canvas is empty'));
+      resolve(blob);
+    }, 'image/jpeg', 0.9);
+  });
 }

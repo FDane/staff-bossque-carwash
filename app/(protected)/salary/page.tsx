@@ -5,13 +5,13 @@ import { useAuth } from '@/contexts/auth-context';
 import { useLanguage } from '@/contexts/language-context';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from '@/components/ui/select';
+import { collection, query, where, getDocs, doc, updateDoc, Timestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth } from 'date-fns';
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, differenceInMinutes, startOfDay, setHours, setMinutes } from 'date-fns';
 import { Wallet, Calendar, Download, TrendingUp, CheckCircle } from 'lucide-react';
 import { jsPDF } from 'jspdf';
-import type { Attendance } from '@/lib/types';
+import type { Attendance, Advance, DailySalary } from '@/lib/types';
 
 const MONTHS = [
   'january', 'february', 'march', 'april', 'may', 'june',
@@ -23,41 +23,141 @@ export default function SalaryPage() {
   const { t, language } = useLanguage();
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [attendanceRecords, setAttendanceRecords] = useState<Attendance[]>([]);
+  const [advances, setAdvances] = useState<Advance[]>([]);
+  const [dailySalaryRecords, setDailySalaryRecords] = useState<DailySalary[]>([]);
+  const [dailyStats, setDailyStats] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
   const currentDate = new Date(selectedYear, selectedMonth, 1);
-  const dailySalary = user?.dailySalary || 0;
-  const daysWorked = attendanceRecords.length;
-  const totalSalary = daysWorked * dailySalary;
 
-  const fetchAttendance = useCallback(async () => {
+  const daysWorked = dailySalaryRecords.length;
+
+  const fetchSalaryData = useCallback(async () => {
     if (!user) return;
-    
+
     const monthStart = startOfMonth(currentDate);
     const monthEnd = endOfMonth(currentDate);
-    
+
     try {
-      const q = query(
-        collection(db, 'attendance'),
+      console.log("Salary reconciliation: Current user tiers:", user?.salaryTiers);
+      // 1. Fetch existing Daily Salary Records
+      const salaryQuery = query(
+        collection(db, 'daily_salaries'),
         where('staffId', '==', user.id),
         where('date', '>=', format(monthStart, 'yyyy-MM-dd')),
         where('date', '<=', format(monthEnd, 'yyyy-MM-dd'))
       );
-      const snapshot = await getDocs(q);
-      const records = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Attendance));
-      setAttendanceRecords(records);
+      const salarySnapshot = await getDocs(salaryQuery);
+      const fetchedRecords = salarySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DailySalary));
+
+      // 2. Fetch Daily Stats to get the final car counts for those days
+      const statsQuery = query(
+        collection(db, 'daily_stats'),
+        where('date', '>=', format(monthStart, 'yyyy-MM-dd')),
+        where('date', '<=', format(monthEnd, 'yyyy-MM-dd'))
+      );
+      const statsSnapshot = await getDocs(statsQuery);
+      const statsMap: Record<string, number> = {};
+      statsSnapshot.docs.forEach(doc => {
+        statsMap[doc.data().date] = doc.data().totalCars || 0;
+      });
+      setDailyStats(statsMap);
+
+      // 3. Fetch Advances to ensure deductions are up to date
+      const advancesQuery = query(
+        collection(db, 'advances'),
+        where('staffId', '==', user.id),
+        where('date', '>=', format(monthStart, 'yyyy-MM-dd')),
+        where('date', '<=', format(monthEnd, 'yyyy-MM-dd'))
+      );
+      const advancesSnapshot = await getDocs(advancesQuery);
+      const advancesRecords = advancesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Advance));
+      setAdvances(advancesRecords);
+
+      // 4. Reconciliation: Update records if the car count or advances have changed
+      const updatedRecords = await Promise.all(fetchedRecords.map(async (record) => {
+        const currentTotalCars = statsMap[record.date] || 0;
+        const dailyAdvances = advancesRecords
+          .filter(adv => adv.date === record.date)
+          .reduce((sum, adv) => sum + adv.amount, 0);
+
+        // If data is out of sync, recalculate
+        if (record.carCount !== currentTotalCars || record.advancesDeducted !== dailyAdvances) {
+          let baseSalary = Number(user.dailySalary) || 0;
+
+          if (user.salaryTiers && typeof user.salaryTiers === 'object') {
+            if (Array.isArray(user.salaryTiers)) {
+              const tierIndex = Math.max(0, Math.min(Math.floor(currentTotalCars / 10), user.salaryTiers.length - 1));
+              baseSalary = Number(user.salaryTiers[tierIndex]) || baseSalary;
+            } else {
+              const tierNumber = Math.min(Math.floor(currentTotalCars / 10) + 1, 5);
+              const tierKey = `t${tierNumber}`;
+              baseSalary = Number((user.salaryTiers as any)[tierKey]) || baseSalary;
+              console.log(`Salary Sync [${record.date}]: Map detected. Key [${tierKey}] -> RM${baseSalary}`);
+            }
+          }
+
+          // Recalculate Penalty and Bonus based on new RM0.50 rules
+          let penalty = 0;
+          let bonus = 0;
+          const clockInTime = record.clockInTime.toDate();
+          const workStart = setHours(setMinutes(startOfDay(clockInTime), 0), 9);
+          const minutesLate = differenceInMinutes(clockInTime, workStart);
+          if (minutesLate >= 10) penalty = Math.floor(minutesLate / 10) * 0.50;
+
+          if (record.clockOutTime) {
+            const clockOutTime = record.clockOutTime.toDate();
+            const workEnd = setHours(setMinutes(startOfDay(clockOutTime), 0), 18);
+            const otStart = setHours(setMinutes(startOfDay(clockOutTime), 30), 18);
+            
+            if (clockOutTime < workEnd) {
+              const minutesEarly = differenceInMinutes(workEnd, clockOutTime);
+              penalty += Math.floor(minutesEarly / 10) * 0.50;
+            } else if (clockOutTime >= otStart) {
+              const minutesOT = differenceInMinutes(clockOutTime, otStart);
+              bonus = Math.floor(minutesOT / 10) * 0.50;
+            }
+          }
+
+          const totalEarnings = Number(baseSalary) - penalty + bonus - dailyAdvances;
+          
+          const docRef = doc(db, 'daily_salaries', record.id);
+          const updateData = {
+            carCount: currentTotalCars,
+            baseSalary: Number(baseSalary),
+            penalty,
+            bonus,
+            advancesDeducted: dailyAdvances,
+            totalEarnings: totalEarnings,
+            lastUpdatedAt: Timestamp.now()
+          };
+          
+          await updateDoc(docRef, updateData);
+          return { ...record, ...updateData };
+        }
+        return record;
+      }));
+
+      setDailySalaryRecords(updatedRecords.sort((a, b) => a.date.localeCompare(b.date)));
     } catch (error) {
-      console.error('Error fetching attendance:', error);
+      console.error('Error fetching salary data:', error);
     } finally {
       setLoading(false);
     }
   }, [user, currentDate]);
 
+  const totalSalary = dailySalaryRecords.reduce((sum, record) => {
+    // If using daily_salaries collection, we can use the stored totalEarnings
+    return sum + (record.totalEarnings || 0);
+  }, 0);
+
+  // Calculate average daily salary based on actual earnings (including tiers, penalties, etc.)
+  const avgDailySalary = daysWorked > 0 ? totalSalary / daysWorked : 0;
+
   useEffect(() => {
     setLoading(true);
-    fetchAttendance();
-  }, [fetchAttendance]);
+    fetchSalaryData();
+  }, [fetchSalaryData]);
 
   const generatePayslip = () => {
     if (!user) return;
@@ -93,7 +193,7 @@ export default function SalaryPage() {
     
     const staffInfo = [
       [`${t('name')}:`, user.name],
-      [`${t('icNumber')}:`, user.icNumber],
+      [`${t('nric')}:`, user.nric],
       [`${t('position')}:`, user.position || '-'],
       [`${t('bankName')}:`, user.bankName || '-'],
       [`${t('bankAccount')}:`, user.bankAccount || '-'],
@@ -112,32 +212,42 @@ export default function SalaryPage() {
     doc.setFont(undefined!, 'bold');
     doc.text(language === 'ms' ? 'BUTIRAN GAJI' : 'SALARY DETAILS', 20, yPos);
     doc.setFont(undefined!, 'normal');
+    doc.setFontSize(9);
+    doc.text(`* ${language === 'ms' ? 'Penalti lewat: RM0.10/10min | OT: RM0.10/10min' : 'Late penalty: RM0.10/10min | OT: RM0.10/10min'}`, 20, yPos + 5);
     
     // Table header
-    yPos += 10;
+    yPos += 15;
     doc.setFillColor(240, 240, 240);
     doc.rect(20, yPos - 5, pageWidth - 40, 10, 'F');
     doc.setFontSize(10);
-    doc.text(language === 'ms' ? 'Perkara' : 'Item', 25, yPos);
+    doc.text(language === 'ms' ? 'Tarikh (Kereta)' : 'Date (Cars)', 25, yPos);
     doc.text(language === 'ms' ? 'Jumlah' : 'Amount', pageWidth - 60, yPos);
     
-    // Table content
-    const salaryItems = [
-      [t('dailySalary'), `RM ${dailySalary.toFixed(2)}`],
-      [t('daysWorked'), `${daysWorked} ${language === 'ms' ? 'hari' : 'days'}`],
-    ];
-    
-    yPos += 15;
-    salaryItems.forEach(([label, value]) => {
-      doc.text(label, 25, yPos);
-      doc.text(value, pageWidth - 60, yPos);
-      yPos += 10;
+    let totalAdvancesDeducted = 0;
+    yPos += 10;
+    dailySalaryRecords.forEach(record => {
+      const clockInTime = record.clockInTime ? format(record.clockInTime.toDate(), 'HH:mm') : 'N/A';
+      const clockOutTime = record.clockOutTime ? format(record.clockOutTime.toDate(), 'HH:mm') : '-';
+      doc.text(`${record.date} (${record.carCount}) | ${clockInTime}-${clockOutTime}`, 25, yPos);
+      doc.text(`RM ${record.totalEarnings.toFixed(2)}`, pageWidth - 60, yPos);
+      yPos += 8;
+      totalAdvancesDeducted += record.advancesDeducted;
     });
     
+    // Advances deduction for the entire month
+    const totalMonthlyAdvances = advances.reduce((sum, adv) => sum + adv.amount, 0);
+
     // Total
-    yPos += 5;
+    yPos += 10;
     doc.setFillColor(30, 58, 95);
     doc.rect(20, yPos - 5, pageWidth - 40, 12, 'F');
+
+    if (totalMonthlyAdvances > 0) {
+      doc.setTextColor(255, 255, 255); // White color for total advances
+      doc.setFont(undefined!, 'bold');
+      doc.text(t('totalAdvances'), 25, yPos - 10); // Display before total salary
+      doc.text(`- RM ${totalMonthlyAdvances.toFixed(2)}`, pageWidth - 60, yPos - 10);
+    }
     doc.setTextColor(255, 255, 255);
     doc.setFont(undefined!, 'bold');
     doc.setFontSize(12);
@@ -149,7 +259,7 @@ export default function SalaryPage() {
     doc.setFont(undefined!, 'normal');
     
     // Attendance List
-    yPos += 25;
+    yPos += 15;
     doc.setFontSize(12);
     doc.setFont(undefined!, 'bold');
     doc.text(language === 'ms' ? 'REKOD KEHADIRAN' : 'ATTENDANCE RECORD', 20, yPos);
@@ -157,7 +267,7 @@ export default function SalaryPage() {
     doc.setFontSize(9);
     
     yPos += 10;
-    const attendanceDates = attendanceRecords.map(r => r.date).sort();
+    const attendanceDates = dailySalaryRecords.map(r => r.date).sort();
     const dateList = attendanceDates.join(', ');
     const splitDates = doc.splitTextToSize(dateList, pageWidth - 40);
     doc.text(splitDates, 20, yPos);
@@ -183,8 +293,8 @@ export default function SalaryPage() {
     start: startOfMonth(currentDate),
     end: endOfMonth(currentDate),
   });
-  
-  const attendanceDates = new Set(attendanceRecords.map(r => r.date));
+
+  const attendanceDates = new Set(dailySalaryRecords.map(r => r.date));
 
   const years = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i);
 
@@ -197,11 +307,14 @@ export default function SalaryPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {MONTHS.map((month, index) => (
-              <SelectItem key={month} value={index.toString()}>
-                {t(month)}
-              </SelectItem>
-            ))}
+            <SelectGroup>
+              <SelectLabel>{t('month')}</SelectLabel>
+              {MONTHS.map((month, index) => (
+                <SelectItem key={month} value={index.toString()}>
+                  {t(month)}
+                </SelectItem>
+              ))}
+            </SelectGroup>
           </SelectContent>
         </Select>
         <Select value={selectedYear.toString()} onValueChange={(v) => setSelectedYear(parseInt(v))}>
@@ -209,11 +322,14 @@ export default function SalaryPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {years.map((year) => (
-              <SelectItem key={year} value={year.toString()}>
-                {year}
-              </SelectItem>
-            ))}
+            <SelectGroup>
+              <SelectLabel>{t('year')}</SelectLabel>
+              {years.map((year) => (
+                <SelectItem key={year} value={year.toString()}>
+                  {year}
+                </SelectItem>
+              ))}
+            </SelectGroup>
           </SelectContent>
         </Select>
       </div>
@@ -225,7 +341,7 @@ export default function SalaryPage() {
             <div>
               <p className="text-sm opacity-90">{t('monthlySalary')}</p>
               <p className="text-3xl font-bold">
-                RM {loading ? '...' : totalSalary.toFixed(2)}
+                RM {totalSalary.toFixed(2)}
               </p>
             </div>
             <Wallet className="h-12 w-12 opacity-80" />
@@ -239,7 +355,7 @@ export default function SalaryPage() {
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">{t('dailySalary')}</p>
-                <p className="font-semibold">RM {dailySalary.toFixed(2)}</p>
+                <p className="font-semibold">RM {avgDailySalary.toFixed(2)}</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -248,7 +364,7 @@ export default function SalaryPage() {
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">{t('daysWorked')}</p>
-                <p className="font-semibold">{loading ? '...' : daysWorked} {language === 'ms' ? 'hari' : 'days'}</p>
+                <p className="font-semibold">{daysWorked} {language === 'ms' ? 'hari' : 'days'}</p>
               </div>
             </div>
           </div>
@@ -266,7 +382,7 @@ export default function SalaryPage() {
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium text-muted-foreground">
             {t('attendanceHistory')} - {t(MONTHS[selectedMonth])} {selectedYear}
-          </CardTitle>
+          </CardTitle> {/* Changed to Attendance Calendar */}
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -278,7 +394,7 @@ export default function SalaryPage() {
           ) : (
             <div className="grid grid-cols-7 gap-1 text-center text-xs">
               {/* Day headers */}
-              {['A', 'I', 'S', 'R', 'K', 'J', 'S'].map((day, i) => (
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, i) => (
                 <div key={i} className="py-1 font-medium text-muted-foreground">
                   {day}
                 </div>
@@ -293,7 +409,7 @@ export default function SalaryPage() {
               {daysInMonth.map((day) => {
                 const dateStr = format(day, 'yyyy-MM-dd');
                 const hasAttendance = attendanceDates.has(dateStr);
-                const isToday = format(new Date(), 'yyyy-MM-dd') === dateStr && isSameMonth(day, new Date());
+                const isToday = format(new Date(), 'yyyy-MM-dd') === dateStr;
                 
                 return (
                   <div
@@ -327,13 +443,19 @@ export default function SalaryPage() {
         <CardContent>
           <div className="space-y-3">
             <div className="flex items-center justify-between py-2 border-b">
-              <span className="text-muted-foreground">{t('dailySalary')}</span>
-              <span className="font-medium">RM {dailySalary.toFixed(2)}</span>
+              <span className="text-muted-foreground">{t('avgDailySalary')}</span> {/* Assuming you add this translation key */}
+              <span className="font-medium">RM {avgDailySalary.toFixed(2)}</span>
             </div>
             <div className="flex items-center justify-between py-2 border-b">
               <span className="text-muted-foreground">{t('daysWorked')}</span>
               <span className="font-medium">{daysWorked}</span>
             </div>
+            {advances.length > 0 && (
+              <div className="flex items-center justify-between py-2 border-b">
+                <span className="text-muted-foreground">{t('advancesDeducted')}</span>
+                <span className="font-medium">- RM {advances.reduce((sum, adv) => sum + adv.amount, 0).toFixed(2)}</span> {/* Display total advances for the month */}
+              </div>
+            )}
             <div className="flex items-center justify-between py-2 border-b">
               <span className="text-muted-foreground">{t('month')}</span>
               <span className="font-medium">{t(MONTHS[selectedMonth])} {selectedYear}</span>
@@ -345,6 +467,56 @@ export default function SalaryPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Daily Breakdown List */}
+      <div className="space-y-3 pb-8">
+        <h3 className="text-sm font-medium text-muted-foreground">{t('dailyBreakdown')}</h3>
+        {dailySalaryRecords.length === 0 ? (
+          <Card>
+            <CardContent className="py-8 text-center text-muted-foreground">
+              {t('noSalaryData')}
+            </CardContent>
+          </Card>
+        ) : (
+          dailySalaryRecords.slice().reverse().map((record) => (
+            <Card key={record.id}>
+              <CardContent className="p-4 space-y-3">
+                <div className="flex justify-between items-start border-b pb-2">
+                  <div>
+                    <p className="font-bold">{record.date}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {record.carCount} {t('cars')}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-lg font-bold text-primary">RM {record.totalEarnings.toFixed(2)}</p>
+                    <p className="text-xs text-muted-foreground">{t('netTotal')}</p>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-y-2 text-sm">
+                  <div className="flex justify-between pr-4 border-r">
+                    <span className="text-muted-foreground text-xs">{t('dailySalary')}</span>
+                    <span className="font-medium">RM {record.baseSalary.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between pl-4">
+                    <span className="text-muted-foreground text-xs">{t('bonus')}</span>
+                    <span className="text-green-600 font-medium">+ RM {record.bonus.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between pr-4 border-r">
+                    <span className="text-muted-foreground text-xs">{t('latePenalty')}</span>
+                    <span className="text-destructive font-medium">- RM {record.penalty.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between pl-4">
+                    <span className="text-muted-foreground text-xs">{t('advancesDeducted')}</span>
+                    <span className="text-destructive font-medium">- RM {record.advancesDeducted.toFixed(2)}</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))
+        )}
+      </div>
     </div>
   );
 }

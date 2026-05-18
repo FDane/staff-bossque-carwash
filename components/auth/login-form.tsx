@@ -15,7 +15,7 @@ import { Loader2, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 
 export function LoginForm() {
-  const [icNumber, setIcNumber] = useState('');
+  const [nric, setnric] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -26,11 +26,11 @@ export function LoginForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!icNumber || !password) return;
+    if (!nric || !password) return;
 
     setIsLoading(true);
     try {
-      const result = await login(icNumber, password, rememberMe);
+      const result = await login(nric, password, rememberMe);
       console.log('Login success:', result);
       toast.success(t('loginSuccess'));
       router.replace('/dashboard');
@@ -61,13 +61,13 @@ export function LoginForm() {
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="icNumber">{t('icNumber')}</Label>
+            <Label htmlFor="nric">{t('nric')}</Label>
             <Input
-              id="icNumber"
+              id="nric"
               type="text"
-              placeholder="900101-01-1234 "
-              value={icNumber}
-              onChange={(e) => setIcNumber(e.target.value)}
+              placeholder="cth. 900101011234 "
+              value={nric}
+              onChange={(e) => setnric(e.target.value)}
               required
               className="h-12"
               autoComplete="username"
@@ -83,7 +83,6 @@ export function LoginForm() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 className="h-12 pr-10"
-                autoComplete="current-password"
               />
               <button
                 type="button"
