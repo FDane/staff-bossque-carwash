@@ -5,10 +5,10 @@ import { useAuth } from '@/contexts/auth-context';
 import { useLanguage } from '@/contexts/language-context';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { collection, addDoc, query, where, getDocs, orderBy, Timestamp, doc, updateDoc, setDoc, deleteDoc as deleteFirestoreDoc } from 'firebase/firestore';
+import { collection, addDoc, query, where, getDocs, orderBy, Timestamp, doc, setDoc, writeBatch, limit, startAfter, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject, StorageReference } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase';
-import { format, startOfDay, setHours, setMinutes, differenceInMinutes } from 'date-fns';
+import { format, startOfDay, setHours, setMinutes, differenceInMinutes, parseISO, eachDayOfInterval, startOfMonth, endOfMonth } from 'date-fns';
 import { Camera, Upload, CheckCircle, Clock, Image as ImageIcon, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Attendance, DailySalary, Advance } from '@/lib/types';
@@ -18,7 +18,10 @@ export default function AttendancePage() {
   const { t } = useLanguage();
   const [attendanceHistory, setAttendanceHistory] = useState<Attendance[]>([]);
   const [todayAttendance, setTodayAttendance] = useState<Attendance | null>(null);
+  const [selectedMonth] = useState(new Date().getMonth());
+  const [selectedYear] = useState(new Date().getFullYear());
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -28,6 +31,10 @@ export default function AttendancePage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isClockingOut, setIsClockingOut] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
+  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+
+  const PAGE_SIZE = 10;
 
   const fetchAttendance = useCallback(async () => {
     if (!user) return;
@@ -50,9 +57,15 @@ export default function AttendancePage() {
       const historyQuery = query(
         collection(db, 'attendance'),
         where('staffId', '==', user.id),
-        orderBy('clockInTime', 'desc')
+        orderBy('clockInTime', 'desc'),
+        limit(PAGE_SIZE)
       );
       const historySnapshot = await getDocs(historyQuery);
+      
+      const lastVisible = historySnapshot.docs[historySnapshot.docs.length - 1];
+      setLastDoc(lastVisible);
+      setHasMore(historySnapshot.docs.length === PAGE_SIZE);
+
       const history = historySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Attendance));
       setAttendanceHistory(history);
     } catch (error) {
@@ -61,6 +74,34 @@ export default function AttendancePage() {
       setLoading(false);
     }
   }, [user]);
+
+  const loadMoreAttendance = async () => {
+    if (!user || !lastDoc || loadingMore) return;
+
+    setLoadingMore(true);
+    try {
+      const nextQuery = query(
+        collection(db, 'attendance'),
+        where('staffId', '==', user.id),
+        orderBy('clockInTime', 'desc'),
+        startAfter(lastDoc),
+        limit(PAGE_SIZE)
+      );
+
+      const snapshot = await getDocs(nextQuery);
+      const lastVisible = snapshot.docs[snapshot.docs.length - 1];
+      
+      setLastDoc(lastVisible || null);
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+
+      const nextHistory = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Attendance));
+      setAttendanceHistory(prev => [...prev, ...nextHistory]);
+    } catch (error) {
+      console.error('Error loading more attendance:', error);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     fetchAttendance();
@@ -162,10 +203,10 @@ export default function AttendancePage() {
     initialAdvancesDeducted: number = 0
   ) => {
     let baseSalary = Number(user?.dailySalary) || 0;
-    let carCount = initialCarCount;
     let penalty = 0;
     let bonus = 0;
     let advancesDeducted = initialAdvancesDeducted;
+    let carCount = initialCarCount;
 
     // Fetch current car count from daily_stats if not provided
     if (initialCarCount === 0) {
@@ -212,7 +253,7 @@ export default function AttendancePage() {
     // Lateness check (9:00 AM start, 10 min grace)
     const workStart = setHours(setMinutes(startOfDay(clockInTime), 0), 9);
     const minutesLate = differenceInMinutes(clockInTime, workStart);
-    if (minutesLate >= 10) { // RM0.10 deduction starts at 10 minutes late
+    if (minutesLate >= 10) { // RM 0.50 deduction starts at 10 minutes late
       penalty = Math.floor(minutesLate / 10) * 0.50;
     }
 
@@ -222,17 +263,24 @@ export default function AttendancePage() {
       const otStart = setHours(setMinutes(startOfDay(clockOutTime), 30), 18); // 6:30 PM
 
       if (clockOutTime < workEnd) {
-        // Early leave penalty: RM0.50 for every 10 mins early
+        // Early leave penalty: RM 0.50 for every 10 mins early
         const minutesEarly = differenceInMinutes(workEnd, clockOutTime);
         penalty += Math.floor(minutesEarly / 10) * 0.50;
       } else if (clockOutTime >= otStart) {
-        // Overtime bonus: RM0.50 for every 10 mins after 6:30 PM
+        // Overtime bonus: RM 0.50 for every 10 mins after 6:30 PM
         const minutesOT = differenceInMinutes(clockOutTime, otStart);
         bonus = Math.floor(minutesOT / 10) * 0.50;
       }
+
+      // Minimum 3 Hours (180 mins) Work Requirement
+      const actualWorkMinutes = differenceInMinutes(clockOutTime, clockInTime);
+      if (actualWorkMinutes < 180) {
+        // Penalty for not fulfilling the 3-hour minimum shift
+        penalty += 10.00; 
+      }
     }
 
-    const totalEarnings = baseSalary - penalty + bonus - advancesDeducted;
+    const totalEarnings = Math.max(0, baseSalary - penalty + bonus - advancesDeducted);
 
     const result: any = {
       staffId,
@@ -328,24 +376,29 @@ export default function AttendancePage() {
     setIsClockingOut(true);
     try {
       const clockOutTimestamp = Timestamp.now();
-      const today = format(new Date(), 'yyyy-MM-dd');
+      const dailySalaryId = `${user.id}_${todayAttendance.date}`;
 
-      // Update attendance record with clock out time
+      // Recalculate and update daily salary record
+      const dailySalaryData = await calculateDailyEarnings(
+        user.id,
+        todayAttendance.date,
+        todayAttendance.clockInTime.toDate(),
+        clockOutTimestamp.toDate()
+      );
+
+      // Use a batch to ensure both updates happen atomically
+      const batch = writeBatch(db);
+      
       const attendanceDocRef = doc(db, 'attendance', todayAttendance.id);
-      await updateDoc(attendanceDocRef, {
+      batch.update(attendanceDocRef, {
         clockOutTime: clockOutTimestamp,
         updatedAt: Timestamp.now(),
       });
 
-      // Recalculate and update daily salary record
-      const dailySalaryDocRef = doc(db, 'daily_salaries', `${user.id}_${today}`);
-      const dailySalaryData = await calculateDailyEarnings(
-        user.id,
-        today,
-        todayAttendance.clockInTime.toDate(),
-        clockOutTimestamp.toDate()
-      );
-      await updateDoc(dailySalaryDocRef, dailySalaryData);
+      const dailySalaryDocRef = doc(db, 'daily_salaries', dailySalaryId);
+      batch.update(dailySalaryDocRef, dailySalaryData);
+
+      await batch.commit();
 
       toast.success(t('clockOutSuccess')); 
       fetchAttendance(); 
@@ -501,6 +554,70 @@ export default function AttendancePage() {
         </Card>
       )}
 
+      {/* Attendance Calendar */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-muted-foreground">
+            {t('attendance')} - {format(new Date(selectedYear, selectedMonth), 'MMMM yyyy')}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="grid grid-cols-7 gap-1">
+              {Array.from({ length: 35 }).map((_, i) => (
+                <div key={i} className="aspect-square animate-pulse rounded bg-muted" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-7 gap-1 text-center text-xs">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, i) => (
+                <div key={i} className="py-1 font-medium text-muted-foreground">
+                  {day}
+                </div>
+              ))}
+              
+              {(() => {
+                const monthStart = startOfMonth(new Date(selectedYear, selectedMonth));
+                const monthEnd = endOfMonth(monthStart);
+                const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
+                const attendanceDates = new Set(attendanceHistory.map(r => r.date));
+                const todayStr = format(new Date(), 'yyyy-MM-dd');
+
+                return (
+                  <>
+                    {Array.from({ length: daysInMonth[0].getDay() }).map((_, i) => (
+                      <div key={`empty-${i}`} />
+                    ))}
+                    
+                    {daysInMonth.map((day) => {
+                      const dateStr = format(day, 'yyyy-MM-dd');
+                      const hasAttendance = attendanceDates.has(dateStr);
+                      const isToday = todayStr === dateStr;
+                      
+                      return (
+                        <div
+                          key={dateStr}
+                          className={`relative flex aspect-square items-center justify-center rounded transition-colors ${
+                            hasAttendance 
+                              ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 font-bold' 
+                              : 'bg-muted/30 text-muted-foreground'
+                          } ${isToday ? 'ring-2 ring-primary ring-offset-1' : ''}`}
+                        >
+                          {format(day, 'd')}
+                          {hasAttendance && (
+                            <CheckCircle className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 text-green-600 dark:text-green-400" />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </>
+                );
+              })()}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Attendance History */}
       <div>
         <h3 className="mb-3 text-sm font-medium text-muted-foreground">{t('attendanceHistory')}</h3>
@@ -546,9 +663,36 @@ export default function AttendancePage() {
                     </div>
                   )}
                   <div className="flex-1">
-                    <p className="font-medium">{record.date}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {record.clockInTime && format(record.clockInTime.toDate(), 'HH:mm')}
+                    {(() => {
+                      const dateObj = parseISO(record.date);
+                      const dayKey = format(dateObj, 'eeee').toLowerCase() as any;
+                      
+                      const formatTimeLocalized = (ts: Timestamp) => {
+                        const date = ts.toDate();
+                        const timeStr = format(date, 'hh:mm');
+                        const period = date.getHours() < 12 ? t('am') : t('pm');
+                        return `${timeStr} ${period}`;
+                      };
+
+                      return (
+                        <>
+                          <p className="font-medium">
+                            {record.date}, {t(dayKey)}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {record.clockInTime && formatTimeLocalized(record.clockInTime)}
+                            {record.clockOutTime && ` - ${formatTimeLocalized(record.clockOutTime)}`}
+                          </p>
+                        </>
+                      );
+                    })()}
+                    <p className="text-xs text-muted-foreground">
+                      {record.clockInTime && record.clockOutTime && (() => {
+                        const durationMins = differenceInMinutes(record.clockOutTime.toDate(), record.clockInTime.toDate());
+                        const hours = Math.floor(durationMins / 60);
+                        const mins = durationMins % 60;
+                        return `${t('duration')}: ${hours}h ${mins}m`;
+                      })()}
                     </p>
                   </div>
                   <CheckCircle className="h-5 w-5 text-green-500" />
@@ -556,6 +700,17 @@ export default function AttendancePage() {
               </Card>
             ))}
           </div>
+        )}
+
+        {hasMore && attendanceHistory.length > 0 && (
+          <Button
+            variant="ghost"
+            className="w-full mt-4 text-muted-foreground"
+            onClick={loadMoreAttendance}
+            disabled={loadingMore}
+          >
+            {loadingMore ? t('loading') : 'Load More'}
+          </Button>
         )}
       </div>
 

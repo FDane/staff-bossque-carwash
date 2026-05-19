@@ -6,7 +6,7 @@ import { useLanguage } from '@/contexts/language-context';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from '@/components/ui/select';
-import { collection, query, where, getDocs, doc, updateDoc, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, updateDoc, Timestamp, Firestore } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, differenceInMinutes, startOfDay, setHours, setMinutes } from 'date-fns';
 import { Wallet, Calendar, Download, TrendingUp, CheckCircle } from 'lucide-react';
@@ -81,46 +81,52 @@ export default function SalaryPage() {
           .filter(adv => adv.date === record.date)
           .reduce((sum, adv) => sum + adv.amount, 0);
 
-        // If data is out of sync, recalculate
-        if (record.carCount !== currentTotalCars || record.advancesDeducted !== dailyAdvances) {
-          let baseSalary = Number(user.dailySalary) || 0;
+        // Always calculate expected values to ensure logic is up to date
+        let baseSalary = Number(user.dailySalary) || 0;
 
-          if (user.salaryTiers && typeof user.salaryTiers === 'object') {
-            if (Array.isArray(user.salaryTiers)) {
-              const tierIndex = Math.max(0, Math.min(Math.floor(currentTotalCars / 10), user.salaryTiers.length - 1));
-              baseSalary = Number(user.salaryTiers[tierIndex]) || baseSalary;
-            } else {
-              const tierNumber = Math.min(Math.floor(currentTotalCars / 10) + 1, 5);
-              const tierKey = `t${tierNumber}`;
-              baseSalary = Number((user.salaryTiers as any)[tierKey]) || baseSalary;
-              console.log(`Salary Sync [${record.date}]: Map detected. Key [${tierKey}] -> RM${baseSalary}`);
-            }
+        if (user.salaryTiers && typeof user.salaryTiers === 'object') {
+          if (Array.isArray(user.salaryTiers)) {
+            const tierIndex = Math.max(0, Math.min(Math.floor(currentTotalCars / 10), user.salaryTiers.length - 1));
+            baseSalary = Number(user.salaryTiers[tierIndex]) || baseSalary;
+          } else {
+            const tierNumber = Math.min(Math.floor(currentTotalCars / 10) + 1, 5);
+            const tierKey = `t${tierNumber}`;
+            baseSalary = Number((user.salaryTiers as any)[tierKey]) || baseSalary;
           }
+        }
 
-          // Recalculate Penalty and Bonus based on new RM0.50 rules
-          let penalty = 0;
-          let bonus = 0;
-          const clockInTime = record.clockInTime.toDate();
-          const workStart = setHours(setMinutes(startOfDay(clockInTime), 0), 9);
-          const minutesLate = differenceInMinutes(clockInTime, workStart);
-          if (minutesLate >= 10) penalty = Math.floor(minutesLate / 10) * 0.50;
+        let penalty = 0;
+        let bonus = 0;
+        const clockInTime = record.clockInTime.toDate();
+        const workStart = setHours(setMinutes(startOfDay(clockInTime), 0), 9);
+        const minutesLate = differenceInMinutes(clockInTime, workStart);
+        if (minutesLate >= 10) penalty = Math.floor(minutesLate / 10) * 0.50;
 
-          if (record.clockOutTime) {
-            const clockOutTime = record.clockOutTime.toDate();
-            const workEnd = setHours(setMinutes(startOfDay(clockOutTime), 0), 18);
-            const otStart = setHours(setMinutes(startOfDay(clockOutTime), 30), 18);
-            
-            if (clockOutTime < workEnd) {
-              const minutesEarly = differenceInMinutes(workEnd, clockOutTime);
-              penalty += Math.floor(minutesEarly / 10) * 0.50;
-            } else if (clockOutTime >= otStart) {
-              const minutesOT = differenceInMinutes(clockOutTime, otStart);
-              bonus = Math.floor(minutesOT / 10) * 0.50;
-            }
-          }
-
-          const totalEarnings = Number(baseSalary) - penalty + bonus - dailyAdvances;
+        if (record.clockOutTime) {
+          const clockOutTime = record.clockOutTime.toDate();
+          const workEnd = setHours(setMinutes(startOfDay(clockOutTime), 0), 18);
+          const otStart = setHours(setMinutes(startOfDay(clockOutTime), 30), 18);
           
+          if (clockOutTime < workEnd) {
+            const minutesEarly = differenceInMinutes(workEnd, clockOutTime);
+            penalty += Math.floor(minutesEarly / 10) * 0.50;
+          } else if (clockOutTime >= otStart) {
+            const minutesOT = differenceInMinutes(clockOutTime, otStart);
+            bonus = Math.floor(minutesOT / 10) * 0.50;
+          }
+
+          // Minimum 3 Hours (180 mins) Work Requirement
+          const actualWorkMinutes = differenceInMinutes(clockOutTime, clockInTime);
+          if (actualWorkMinutes < 180) {
+            // Penalty for not fulfilling the 3-hour minimum shift
+            penalty += 10.00;
+          }
+        }
+
+        const totalEarnings = Math.max(0, Number(baseSalary) - penalty + bonus - dailyAdvances);
+        
+        // If any data is out of sync or logic has changed, update Firestore
+        if (record.carCount !== currentTotalCars || record.advancesDeducted !== dailyAdvances || record.penalty !== penalty || record.bonus !== bonus || record.baseSalary !== baseSalary) {
           const docRef = doc(db, 'daily_salaries', record.id);
           const updateData = {
             carCount: currentTotalCars,
@@ -131,7 +137,6 @@ export default function SalaryPage() {
             totalEarnings: totalEarnings,
             lastUpdatedAt: Timestamp.now()
           };
-          
           await updateDoc(docRef, updateData);
           return { ...record, ...updateData };
         }
@@ -210,10 +215,10 @@ export default function SalaryPage() {
     yPos += 10;
     doc.setFontSize(12);
     doc.setFont(undefined!, 'bold');
-    doc.text(language === 'ms' ? 'BUTIRAN GAJI' : 'SALARY DETAILS', 20, yPos);
+doc.text(language === 'ms' ? 'BUTIRAN GAJI' : 'SALARY DETAILS', 20, yPos); // Keep this line
     doc.setFont(undefined!, 'normal');
     doc.setFontSize(9);
-    doc.text(`* ${language === 'ms' ? 'Penalti lewat: RM0.10/10min | OT: RM0.10/10min' : 'Late penalty: RM0.10/10min | OT: RM0.10/10min'}`, 20, yPos + 5);
+doc.text(`* ${language === 'ms' ? 'Penalti lewat: RM0.50/10min | OT: RM0.50/10min' : 'Late penalty: RM0.50/10min | OT: RM0.50/10min'}`, 20, yPos + 5);
     
     // Table header
     yPos += 15;
@@ -228,7 +233,16 @@ export default function SalaryPage() {
     dailySalaryRecords.forEach(record => {
       const clockInTime = record.clockInTime ? format(record.clockInTime.toDate(), 'HH:mm') : 'N/A';
       const clockOutTime = record.clockOutTime ? format(record.clockOutTime.toDate(), 'HH:mm') : '-';
-      doc.text(`${record.date} (${record.carCount}) | ${clockInTime}-${clockOutTime}`, 25, yPos);
+      
+      let durationText = '';
+      if (record.clockOutTime && record.clockInTime) {
+        const diff = differenceInMinutes(record.clockOutTime.toDate(), record.clockInTime.toDate());
+        const h = Math.floor(diff / 60);
+        const m = diff % 60;
+        durationText = ` (${h}h ${m}m)`;
+      }
+
+      doc.text(`${record.date} (${record.carCount}) | ${clockInTime}-${clockOutTime}${durationText}`, 25, yPos);
       doc.text(`RM ${record.totalEarnings.toFixed(2)}`, pageWidth - 60, yPos);
       yPos += 8;
       totalAdvancesDeducted += record.advancesDeducted;
@@ -377,61 +391,6 @@ export default function SalaryPage() {
         {t('downloadPayslip')}
       </Button>
 
-      {/* Calendar View */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium text-muted-foreground">
-            {t('attendanceHistory')} - {t(MONTHS[selectedMonth])} {selectedYear}
-          </CardTitle> {/* Changed to Attendance Calendar */}
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="grid grid-cols-7 gap-1">
-              {Array.from({ length: 35 }).map((_, i) => (
-                <div key={i} className="aspect-square animate-pulse rounded bg-muted" />
-              ))}
-            </div>
-          ) : (
-            <div className="grid grid-cols-7 gap-1 text-center text-xs">
-              {/* Day headers */}
-              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, i) => (
-                <div key={i} className="py-1 font-medium text-muted-foreground">
-                  {day}
-                </div>
-              ))}
-              
-              {/* Empty cells for start of month */}
-              {Array.from({ length: daysInMonth[0].getDay() }).map((_, i) => (
-                <div key={`empty-${i}`} />
-              ))}
-              
-              {/* Days */}
-              {daysInMonth.map((day) => {
-                const dateStr = format(day, 'yyyy-MM-dd');
-                const hasAttendance = attendanceDates.has(dateStr);
-                const isToday = format(new Date(), 'yyyy-MM-dd') === dateStr;
-                
-                return (
-                  <div
-                    key={dateStr}
-                    className={`relative flex aspect-square items-center justify-center rounded ${
-                      hasAttendance 
-                        ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' 
-                        : 'bg-muted/50'
-                    } ${isToday ? 'ring-2 ring-primary' : ''}`}
-                  >
-                    {format(day, 'd')}
-                    {hasAttendance && (
-                      <CheckCircle className="absolute -bottom-0.5 -right-0.5 h-3 w-3 text-green-500" />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
       {/* Detailed Breakdown */}
       <Card>
         <CardHeader>
@@ -480,12 +439,24 @@ export default function SalaryPage() {
         ) : (
           dailySalaryRecords.slice().reverse().map((record) => (
             <Card key={record.id}>
+              {/* Logic to calculate duration and penalties for display */}
+              {(() => {
+                const durationMins = record.clockOutTime 
+                  ? differenceInMinutes(record.clockOutTime.toDate(), record.clockInTime.toDate()) 
+                  : 0;
+                const isShortShift = record.clockOutTime && durationMins < 180;
+                const shortShiftPenalty = isShortShift ? 10 : 0;
+                const latePenalty = record.penalty - shortShiftPenalty;
+                const hours = Math.floor(durationMins / 60);
+                const mins = durationMins % 60;
+
+                return (
               <CardContent className="p-4 space-y-3">
                 <div className="flex justify-between items-start border-b pb-2">
                   <div>
                     <p className="font-bold">{record.date}</p>
                     <p className="text-xs text-muted-foreground">
-                      {record.carCount} {t('cars')}
+                      {record.carCount} {t('cars')} {record.clockOutTime && `| ${t('duration')}: ${hours}h ${mins}m`}
                     </p>
                   </div>
                   <div className="text-right">
@@ -505,14 +476,22 @@ export default function SalaryPage() {
                   </div>
                   <div className="flex justify-between pr-4 border-r">
                     <span className="text-muted-foreground text-xs">{t('latePenalty')}</span>
-                    <span className="text-destructive font-medium">- RM {record.penalty.toFixed(2)}</span>
+                    <span className="text-destructive font-medium">- RM {latePenalty.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between pl-4">
                     <span className="text-muted-foreground text-xs">{t('advancesDeducted')}</span>
                     <span className="text-destructive font-medium">- RM {record.advancesDeducted.toFixed(2)}</span>
                   </div>
+                  {isShortShift && (
+                    <div className="col-span-2 flex justify-between pt-1 border-t mt-1">
+                      <span className="text-destructive text-xs font-medium">{t('shortShift')}</span>
+                      <span className="text-destructive font-medium">- RM {shortShiftPenalty.toFixed(2)}</span>
+                    </div>
+                  )}
                 </div>
               </CardContent>
+                );
+              })()}
             </Card>
           ))
         )}

@@ -14,6 +14,8 @@ export const translations = {
     error: 'Ralat',
     confirm: 'Sahkan',
     download: 'Muat Turun',
+    am: 'Pagi',
+    pm: 'Petang',
 
     // Auth
     login: 'Log Masuk',
@@ -102,10 +104,12 @@ export const translations = {
     totalAdvances: 'Jumlah Pinjaman',
     advancesDeducted: 'Penolakan Pinjaman',
     dailyBreakdown: 'Pecahan Gaji Harian',
-    latePenalty: 'Penalti Lewat',
+    latePenalty: 'Penalti Lewat/ Balik Awal',
     bonus: 'Bonus OT',
     netTotal: 'Jumlah Bersih',
     cars: 'Kereta',
+    shortShift: 'Penalti Syif Pendek (<3j)',
+    duration: 'Tempoh Bekerja',
 
     // Profile
     personalDetails: 'Butiran Peribadi',
@@ -165,6 +169,8 @@ export const translations = {
     error: 'Error',
     confirm: 'Confirm',
     download: 'Download',
+    am: 'AM',
+    pm: 'PM',
 
     // Auth
     login: 'Login',
@@ -254,10 +260,12 @@ export const translations = {
     advanceDeducts: 'Advances Deducted',
     advancesDeducted: 'Advance Deducted',
     dailyBreakdown: 'Daily Salary Breakdown',
-    latePenalty: 'Late Penalty',
+    latePenalty: 'Late Penalty/ Early Leave Penalty',
     bonus: 'OT Bonus',
     netTotal: 'Net Total',
     cars: 'Cars',
+    shortShift: 'Short Shift Penalty (<3h)',
+    duration: 'Duration',
 
     // Profile
     personalDetails: 'Personal Details',
