@@ -5,7 +5,7 @@ import { useAuth } from '@/contexts/auth-context';
 import { useLanguage } from '@/contexts/language-context';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { collection, addDoc, query, where, getDocs, orderBy, Timestamp, doc, setDoc, writeBatch, limit, startAfter, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
+import { collection, addDoc, query, where, getDocs, getDoc, orderBy, Timestamp, doc, setDoc, writeBatch, limit, startAfter, QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject, StorageReference } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase';
 import { format, startOfDay, setHours, setMinutes, differenceInMinutes, parseISO, eachDayOfInterval, startOfMonth, endOfMonth } from 'date-fns';
@@ -378,12 +378,18 @@ export default function AttendancePage() {
       const clockOutTimestamp = Timestamp.now();
       const dailySalaryId = `${user.id}_${todayAttendance.date}`;
 
+      // Fetch the current record first to preserve any advances deducted by the cashier
+      const salaryDoc = await getDoc(doc(db, 'daily_salaries', dailySalaryId));
+      const existingAdvances = salaryDoc.exists() ? (salaryDoc.data().advancesDeducted || 0) : 0;
+
       // Recalculate and update daily salary record
       const dailySalaryData = await calculateDailyEarnings(
         user.id,
         todayAttendance.date,
         todayAttendance.clockInTime.toDate(),
-        clockOutTimestamp.toDate()
+        clockOutTimestamp.toDate(),
+        0, // Car count will be fetched inside calculateDailyEarnings
+        existingAdvances // Pass the existing value to prevent overwriting with 0
       );
 
       // Use a batch to ensure both updates happen atomically

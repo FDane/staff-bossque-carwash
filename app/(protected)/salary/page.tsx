@@ -77,9 +77,8 @@ export default function SalaryPage() {
       // 4. Reconciliation: Update records if the car count or advances have changed
       const updatedRecords = await Promise.all(fetchedRecords.map(async (record) => {
         const currentTotalCars = statsMap[record.date] || 0;
-        const dailyAdvances = advancesRecords
-          .filter(adv => adv.date === record.date)
-          .reduce((sum, adv) => sum + adv.amount, 0);
+        // Use the existing advancesDeducted from the record to avoid overwriting values set by the cashier system
+        const currentAdvances = record.advancesDeducted || 0;
 
         // Always calculate expected values to ensure logic is up to date
         let baseSalary = Number(user.dailySalary) || 0;
@@ -123,17 +122,17 @@ export default function SalaryPage() {
           }
         }
 
-        const totalEarnings = Math.max(0, Number(baseSalary) - penalty + bonus - dailyAdvances);
+        const totalEarnings = Math.max(0, Number(baseSalary) - penalty + bonus - currentAdvances);
         
         // If any data is out of sync or logic has changed, update Firestore
-        if (record.carCount !== currentTotalCars || record.advancesDeducted !== dailyAdvances || record.penalty !== penalty || record.bonus !== bonus || record.baseSalary !== baseSalary) {
+        if (record.carCount !== currentTotalCars || record.penalty !== penalty || record.bonus !== bonus || record.baseSalary !== baseSalary) {
           const docRef = doc(db, 'daily_salaries', record.id);
           const updateData = {
             carCount: currentTotalCars,
             baseSalary: Number(baseSalary),
             penalty,
             bonus,
-            advancesDeducted: dailyAdvances,
+            // We do not include advancesDeducted in the update to preserve cashier-entered data
             totalEarnings: totalEarnings,
             lastUpdatedAt: Timestamp.now()
           };
@@ -158,6 +157,9 @@ export default function SalaryPage() {
 
   // Calculate average daily salary based on actual earnings (including tiers, penalties, etc.)
   const avgDailySalary = daysWorked > 0 ? totalSalary / daysWorked : 0;
+
+  // Calculate total monthly advances from the daily salary records for accurate summary
+  const totalMonthlyAdvancesFromRecords = dailySalaryRecords.reduce((sum, record) => sum + (record.advancesDeducted || 0), 0);
 
   useEffect(() => {
     setLoading(true);
@@ -247,20 +249,17 @@ doc.text(`* ${language === 'ms' ? 'Penalti lewat: RM0.50/10min | OT: RM0.50/10mi
       yPos += 8;
       totalAdvancesDeducted += record.advancesDeducted;
     });
-    
-    // Advances deduction for the entire month
-    const totalMonthlyAdvances = advances.reduce((sum, adv) => sum + adv.amount, 0);
 
     // Total
     yPos += 10;
     doc.setFillColor(30, 58, 95);
     doc.rect(20, yPos - 5, pageWidth - 40, 12, 'F');
 
-    if (totalMonthlyAdvances > 0) {
+    if (totalAdvancesDeducted > 0) {
       doc.setTextColor(255, 255, 255); // White color for total advances
       doc.setFont(undefined!, 'bold');
       doc.text(t('totalAdvances'), 25, yPos - 10); // Display before total salary
-      doc.text(`- RM ${totalMonthlyAdvances.toFixed(2)}`, pageWidth - 60, yPos - 10);
+      doc.text(`- RM ${totalAdvancesDeducted.toFixed(2)}`, pageWidth - 60, yPos - 10);
     }
     doc.setTextColor(255, 255, 255);
     doc.setFont(undefined!, 'bold');
@@ -409,10 +408,10 @@ doc.text(`* ${language === 'ms' ? 'Penalti lewat: RM0.50/10min | OT: RM0.50/10mi
               <span className="text-muted-foreground">{t('daysWorked')}</span>
               <span className="font-medium">{daysWorked}</span>
             </div>
-            {advances.length > 0 && (
+            {totalMonthlyAdvancesFromRecords > 0 && (
               <div className="flex items-center justify-between py-2 border-b">
                 <span className="text-muted-foreground">{t('advancesDeducted')}</span>
-                <span className="font-medium">- RM {advances.reduce((sum, adv) => sum + adv.amount, 0).toFixed(2)}</span> {/* Display total advances for the month */}
+                <span className="font-medium">- RM {totalMonthlyAdvancesFromRecords.toFixed(2)}</span>
               </div>
             )}
             <div className="flex items-center justify-between py-2 border-b">
