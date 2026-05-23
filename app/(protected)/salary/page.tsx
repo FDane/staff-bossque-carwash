@@ -6,12 +6,12 @@ import { useLanguage } from '@/contexts/language-context';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel } from '@/components/ui/select';
-import { collection, query, where, getDocs, doc, updateDoc, Timestamp, Firestore } from 'firebase/firestore';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, differenceInMinutes, startOfDay, setHours, setMinutes } from 'date-fns';
+import { format, startOfMonth, endOfMonth, differenceInMinutes } from 'date-fns';
 import { Wallet, Calendar, Download, TrendingUp, CheckCircle } from 'lucide-react';
 import { jsPDF } from 'jspdf';
-import type { Attendance, Advance, DailySalary } from '@/lib/types';
+import type { DailySalary } from '@/lib/types';
 
 const MONTHS = [
   'january', 'february', 'march', 'april', 'may', 'june',
@@ -23,9 +23,7 @@ export default function SalaryPage() {
   const { t, language } = useLanguage();
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [advances, setAdvances] = useState<Advance[]>([]);
   const [dailySalaryRecords, setDailySalaryRecords] = useState<DailySalary[]>([]);
-  const [dailyStats, setDailyStats] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
   const currentDate = new Date(selectedYear, selectedMonth, 1);
@@ -39,8 +37,7 @@ export default function SalaryPage() {
     const monthEnd = endOfMonth(currentDate);
 
     try {
-      console.log("Salary reconciliation: Current user tiers:", user?.salaryTiers);
-      // 1. Fetch existing Daily Salary Records
+      // Fetch existing Daily Salary Records
       const salaryQuery = query(
         collection(db, 'daily_salaries'),
         where('staffId', '==', user.id),
@@ -50,99 +47,7 @@ export default function SalaryPage() {
       const salarySnapshot = await getDocs(salaryQuery);
       const fetchedRecords = salarySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DailySalary));
 
-      // 2. Fetch Daily Stats to get the final car counts for those days
-      const statsQuery = query(
-        collection(db, 'daily_stats'),
-        where('date', '>=', format(monthStart, 'yyyy-MM-dd')),
-        where('date', '<=', format(monthEnd, 'yyyy-MM-dd'))
-      );
-      const statsSnapshot = await getDocs(statsQuery);
-      const statsMap: Record<string, number> = {};
-      statsSnapshot.docs.forEach(doc => {
-        statsMap[doc.data().date] = doc.data().totalCars || 0;
-      });
-      setDailyStats(statsMap);
-
-      // 3. Fetch Advances to ensure deductions are up to date
-      const advancesQuery = query(
-        collection(db, 'advances'),
-        where('staffId', '==', user.id),
-        where('date', '>=', format(monthStart, 'yyyy-MM-dd')),
-        where('date', '<=', format(monthEnd, 'yyyy-MM-dd'))
-      );
-      const advancesSnapshot = await getDocs(advancesQuery);
-      const advancesRecords = advancesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Advance));
-      setAdvances(advancesRecords);
-
-      // 4. Reconciliation: Update records if the car count or advances have changed
-      const updatedRecords = await Promise.all(fetchedRecords.map(async (record) => {
-        const currentTotalCars = statsMap[record.date] || 0;
-        // Use the existing advancesDeducted from the record to avoid overwriting values set by the cashier system
-        const currentAdvances = record.advancesDeducted || 0;
-
-        // Always calculate expected values to ensure logic is up to date
-        let baseSalary = Number(user.dailySalary) || 0;
-
-        if (user.salaryTiers && typeof user.salaryTiers === 'object') {
-          if (Array.isArray(user.salaryTiers)) {
-            const tierIndex = Math.max(0, Math.min(Math.floor(currentTotalCars / 10), user.salaryTiers.length - 1));
-            baseSalary = Number(user.salaryTiers[tierIndex]) || baseSalary;
-          } else {
-            const tierNumber = Math.min(Math.floor(currentTotalCars / 10) + 1, 5);
-            const tierKey = `t${tierNumber}`;
-            baseSalary = Number((user.salaryTiers as any)[tierKey]) || baseSalary;
-          }
-        }
-
-        let penalty = 0;
-        let bonus = 0;
-        const clockInTime = record.clockInTime.toDate();
-        const workStart = setHours(setMinutes(startOfDay(clockInTime), 0), 9);
-        const minutesLate = differenceInMinutes(clockInTime, workStart);
-        if (minutesLate >= 10) penalty = Math.floor(minutesLate / 10) * 0.50;
-
-        if (record.clockOutTime) {
-          const clockOutTime = record.clockOutTime.toDate();
-          const workEnd = setHours(setMinutes(startOfDay(clockOutTime), 0), 18);
-          const otStart = setHours(setMinutes(startOfDay(clockOutTime), 30), 18);
-          
-          if (clockOutTime < workEnd) {
-            const minutesEarly = differenceInMinutes(workEnd, clockOutTime);
-            penalty += Math.floor(minutesEarly / 10) * 0.50;
-          } else if (clockOutTime >= otStart) {
-            const minutesOT = differenceInMinutes(clockOutTime, otStart);
-            bonus = Math.floor(minutesOT / 10) * 0.50;
-          }
-
-          // Minimum 3 Hours (180 mins) Work Requirement
-          const actualWorkMinutes = differenceInMinutes(clockOutTime, clockInTime);
-          if (actualWorkMinutes < 180) {
-            // Penalty for not fulfilling the 3-hour minimum shift
-            penalty += 10.00;
-          }
-        }
-
-        const totalEarnings = Math.max(0, Number(baseSalary) - penalty + bonus - currentAdvances);
-        
-        // If any data is out of sync or logic has changed, update Firestore
-        if (record.carCount !== currentTotalCars || record.penalty !== penalty || record.bonus !== bonus || record.baseSalary !== baseSalary) {
-          const docRef = doc(db, 'daily_salaries', record.id);
-          const updateData = {
-            carCount: currentTotalCars,
-            baseSalary: Number(baseSalary),
-            penalty,
-            bonus,
-            // We do not include advancesDeducted in the update to preserve cashier-entered data
-            totalEarnings: totalEarnings,
-            lastUpdatedAt: Timestamp.now()
-          };
-          await updateDoc(docRef, updateData);
-          return { ...record, ...updateData };
-        }
-        return record;
-      }));
-
-      setDailySalaryRecords(updatedRecords.sort((a, b) => a.date.localeCompare(b.date)));
+      setDailySalaryRecords(fetchedRecords.sort((a, b) => a.date.localeCompare(b.date)));
     } catch (error) {
       console.error('Error fetching salary data:', error);
     } finally {
@@ -300,14 +205,6 @@ doc.text(`* ${language === 'ms' ? 'Penalti lewat: RM0.50/10min | OT: RM0.50/10mi
     // Save
     doc.save(`Payslip_${user.name}_${monthName}_${selectedYear}.pdf`);
   };
-
-  // Generate calendar view data
-  const daysInMonth = eachDayOfInterval({
-    start: startOfMonth(currentDate),
-    end: endOfMonth(currentDate),
-  });
-
-  const attendanceDates = new Set(dailySalaryRecords.map(r => r.date));
 
   const years = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i);
 
