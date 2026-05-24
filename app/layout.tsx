@@ -5,6 +5,7 @@ import { ThemeProvider } from 'next-themes';
 import { LanguageProvider } from '@/contexts/language-context';
 import { AuthProvider } from '@/contexts/auth-context';
 import { Toaster } from 'sonner';
+import { PWARegistration } from '@/components/pwa-registration';
 import './globals.css';
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-geist' });
@@ -44,6 +45,7 @@ export default function RootLayout({
   return (
     <html lang="ms" suppressHydrationWarning className="bg-background">
       <body className={`${geist.variable} ${geistMono.variable} font-sans antialiased`}>
+        <PWARegistration />
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <LanguageProvider>
             <AuthProvider>
