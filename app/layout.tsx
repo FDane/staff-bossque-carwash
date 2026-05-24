@@ -6,6 +6,7 @@ import { LanguageProvider } from '@/contexts/language-context';
 import { AuthProvider } from '@/contexts/auth-context';
 import { Toaster } from 'sonner';
 import { PWARegistration } from '@/components/pwa-registration';
+import { InstallPrompt } from '@/components/install-prompt';
 import './globals.css';
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-geist' });
@@ -46,6 +47,7 @@ export default function RootLayout({
     <html lang="ms" suppressHydrationWarning className="bg-background">
       <body className={`${geist.variable} ${geistMono.variable} font-sans antialiased`}>
         <PWARegistration />
+        <InstallPrompt />
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <LanguageProvider>
             <AuthProvider>
