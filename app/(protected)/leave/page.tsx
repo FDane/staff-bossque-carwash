@@ -63,7 +63,7 @@ export default function LeavePage() {
 
   const notifyAdminWhatsAppLeave = async () => {
     // Fallback to staffId if the user object doesn't have a displayName property
-    const staffIdentifier = (user as any)?.displayName || user?.id || 'Pekerja';
+    const staffIdentifier = (user as any)?.name || user?.id || 'Pekerja';
     const typeLabel = leaveType === 'sick' ? 'Cuti Sakit' : 'Cuti Kecemasan';
 
     const messageText = `🚗 *Carwash Bossque*\n\nNotifikasi Permohonan Cuti:\n👤 Staff: *${staffIdentifier}*\n📝 Jenis: *${typeLabel}*\n📅 Tarikh: *${startDate}* hingga *${endDate}*\n💡 Sebab: _${reason}_`;

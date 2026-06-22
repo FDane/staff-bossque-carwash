@@ -307,7 +307,7 @@ export default function AttendancePage() {
     const timeStr = format(time, 'dd MMM yyyy, hh:mm a');
 
     // Fallback to staffId if the user object doesn't have a displayName property
-    const staffIdentifier = (user as any)?.displayName || user?.id || 'Pekerja';
+    const staffIdentifier = (user as any)?.name || user?.id || 'Pekerja';
 
     const messageText = `🚗 *Carwash Bossque*\n\nNotifikasi Kehadiran:\n👤 Staff: *${staffIdentifier}*\n📝 Status: *${action}*\n⏰ Masa: *${timeStr}*`;
 
