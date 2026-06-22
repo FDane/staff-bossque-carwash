@@ -38,9 +38,9 @@ export default function AttendancePage() {
 
   const fetchAttendance = useCallback(async () => {
     if (!user) return;
-    
+
     const today = format(new Date(), 'yyyy-MM-dd');
-    
+
     try {
       // Check today's attendance
       const todayQuery = query(
@@ -61,7 +61,7 @@ export default function AttendancePage() {
         limit(PAGE_SIZE)
       );
       const historySnapshot = await getDocs(historyQuery);
-      
+
       const lastVisible = historySnapshot.docs[historySnapshot.docs.length - 1];
       setLastDoc(lastVisible);
       setHasMore(historySnapshot.docs.length === PAGE_SIZE);
@@ -90,7 +90,7 @@ export default function AttendancePage() {
 
       const snapshot = await getDocs(nextQuery);
       const lastVisible = snapshot.docs[snapshot.docs.length - 1];
-      
+
       setLastDoc(lastVisible || null);
       setHasMore(snapshot.docs.length === PAGE_SIZE);
 
@@ -140,8 +140,8 @@ export default function AttendancePage() {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } 
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
       });
       streamRef.current = stream;
       setShowCamera(true);
@@ -276,7 +276,7 @@ export default function AttendancePage() {
       const actualWorkMinutes = differenceInMinutes(clockOutTime, clockInTime);
       if (actualWorkMinutes < 180) {
         // Penalty for not fulfilling the 3-hour minimum shift
-        penalty += 10.00; 
+        penalty += 10.00;
       }
     }
 
@@ -301,6 +301,27 @@ export default function AttendancePage() {
 
     return result;
   }, [user]);
+
+  const notifyAdminWhatsApp = async (action: 'Clock In' | 'Clock Out', time: Date) => {
+    // Format the time (e.g., "22 Jun 2026, 08:30 AM")
+    const timeStr = format(time, 'dd MMM yyyy, hh:mm a');
+
+    // Fallback to staffId if the user object doesn't have a displayName property
+    const staffIdentifier = (user as any)?.displayName || user?.id || 'Pekerja';
+
+    const messageText = `🚗 *Carwash Bossque*\n\nNotifikasi Kehadiran:\n👤 Staff: *${staffIdentifier}*\n📝 Status: *${action}*\n⏰ Masa: *${timeStr}*`;
+
+    try {
+      // Send this payload to your secure backend (Next.js API route or Firebase Function)
+      await fetch('/api/send-whatsapp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: messageText })
+      });
+    } catch (error) {
+      console.error('Failed to trigger WhatsApp notification:', error);
+    }
+  };
 
   const handleClockIn = async () => {
     if (!user || !selectedImage) return;
@@ -335,9 +356,9 @@ export default function AttendancePage() {
       console.log("Attendance: Initial Salary Record for Clock-in:", initialDailySalaryData);
 
       // 2. Create daily_salaries record
-      await setDoc(doc(db, 'daily_salaries', dailySalaryId), { 
-        ...initialDailySalaryData, 
-        id: dailySalaryId 
+      await setDoc(doc(db, 'daily_salaries', dailySalaryId), {
+        ...initialDailySalaryData,
+        id: dailySalaryId
       });
 
       // 3. Save attendance record
@@ -348,6 +369,8 @@ export default function AttendancePage() {
         imageUrl,
         createdAt: Timestamp.now(),
       });
+
+      notifyAdminWhatsApp('Clock In', clockInTimestamp.toDate());
 
       toast.success(t('clockInSuccess'));
       clearImage();
@@ -394,7 +417,7 @@ export default function AttendancePage() {
 
       // Use a batch to ensure both updates happen atomically
       const batch = writeBatch(db);
-      
+
       const attendanceDocRef = doc(db, 'attendance', todayAttendance.id);
       batch.update(attendanceDocRef, {
         clockOutTime: clockOutTimestamp,
@@ -406,8 +429,11 @@ export default function AttendancePage() {
 
       await batch.commit();
 
-      toast.success(t('clockOutSuccess')); 
-      fetchAttendance(); 
+      // NEW: Trigger WhatsApp Alert for Clock Out
+      notifyAdminWhatsApp('Clock Out', clockOutTimestamp.toDate());
+
+      toast.success(t('clockOutSuccess'));
+      fetchAttendance();
     } catch (error) {
       console.error('Error clocking out:', error);
       toast.error(t('error'));
@@ -435,11 +461,11 @@ export default function AttendancePage() {
             {showCamera ? (
               <div className="space-y-4">
                 <div className="relative aspect-video overflow-hidden rounded-lg bg-muted">
-                  <video 
-                    ref={videoRef} 
-                    autoPlay 
-                    playsInline 
-                    muted 
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
                     className="h-full w-full object-cover"
                   />
                 </div>
@@ -464,9 +490,9 @@ export default function AttendancePage() {
                     <X className="h-4 w-4" />
                   </button>
                 </div>
-                <Button 
-                  onClick={handleClockIn} 
-                  className="w-full gap-2" 
+                <Button
+                  onClick={handleClockIn}
+                  className="w-full gap-2"
                   disabled={uploading}
                 >
                   {uploading ? (
@@ -492,7 +518,7 @@ export default function AttendancePage() {
                   onChange={handleFileSelect}
                   className="hidden"
                 />
-                <Button 
+                <Button
                   onClick={startCamera}
                   className="w-full gap-2"
                   variant="default"
@@ -500,7 +526,7 @@ export default function AttendancePage() {
                   <Camera className="h-4 w-4" />
                   {t('takePhoto')}
                 </Button>
-                <Button 
+                <Button
                   onClick={() => fileInputRef.current?.click()}
                   variant="outline"
                   className="w-full gap-2"
@@ -550,9 +576,9 @@ export default function AttendancePage() {
               </p>
             </div>
             {todayAttendance.imageUrl && (
-              <img 
-                src={todayAttendance.imageUrl} 
-                alt="Today" 
+              <img
+                src={todayAttendance.imageUrl}
+                alt="Today"
                 className="h-14 w-14 rounded-lg object-cover"
               />
             )}
@@ -581,7 +607,7 @@ export default function AttendancePage() {
                   {day}
                 </div>
               ))}
-              
+
               {(() => {
                 const monthStart = startOfMonth(new Date(selectedYear, selectedMonth));
                 const monthEnd = endOfMonth(monthStart);
@@ -594,20 +620,19 @@ export default function AttendancePage() {
                     {Array.from({ length: daysInMonth[0].getDay() }).map((_, i) => (
                       <div key={`empty-${i}`} />
                     ))}
-                    
+
                     {daysInMonth.map((day) => {
                       const dateStr = format(day, 'yyyy-MM-dd');
                       const hasAttendance = attendanceDates.has(dateStr);
                       const isToday = todayStr === dateStr;
-                      
+
                       return (
                         <div
                           key={dateStr}
-                          className={`relative flex aspect-square items-center justify-center rounded transition-colors ${
-                            hasAttendance 
-                              ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 font-bold' 
+                          className={`relative flex aspect-square items-center justify-center rounded transition-colors ${hasAttendance
+                              ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 font-bold'
                               : 'bg-muted/30 text-muted-foreground'
-                          } ${isToday ? 'ring-2 ring-primary ring-offset-1' : ''}`}
+                            } ${isToday ? 'ring-2 ring-primary ring-offset-1' : ''}`}
                         >
                           {format(day, 'd')}
                           {hasAttendance && (
@@ -658,9 +683,9 @@ export default function AttendancePage() {
               <Card key={record.id}>
                 <CardContent className="flex items-center gap-4 p-4">
                   {record.imageUrl ? (
-                    <img 
-                      src={record.imageUrl} 
-                      alt="Attendance" 
+                    <img
+                      src={record.imageUrl}
+                      alt="Attendance"
                       className="h-12 w-12 rounded-lg object-cover"
                     />
                   ) : (
@@ -672,7 +697,7 @@ export default function AttendancePage() {
                     {(() => {
                       const dateObj = parseISO(record.date);
                       const dayKey = format(dateObj, 'eeee').toLowerCase() as any;
-                      
+
                       const formatTimeLocalized = (ts: Timestamp) => {
                         const date = ts.toDate();
                         const timeStr = format(date, 'hh:mm');

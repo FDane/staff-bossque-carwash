@@ -61,6 +61,25 @@ export default function LeavePage() {
     setShowForm(false);
   };
 
+  const notifyAdminWhatsAppLeave = async () => {
+    // Fallback to staffId if the user object doesn't have a displayName property
+    const staffIdentifier = (user as any)?.displayName || user?.id || 'Pekerja';
+    const typeLabel = leaveType === 'sick' ? 'Cuti Sakit' : 'Cuti Kecemasan';
+
+    const messageText = `🚗 *Carwash Bossque*\n\nNotifikasi Permohonan Cuti:\n👤 Staff: *${staffIdentifier}*\n📝 Jenis: *${typeLabel}*\n📅 Tarikh: *${startDate}* hingga *${endDate}*\n💡 Sebab: _${reason}_`;
+
+    try {
+      // Reuses the exact same API route you built for the Attendance page
+      await fetch('/api/send-whatsapp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: messageText })
+      });
+    } catch (error) {
+      console.error('Failed to trigger WhatsApp notification:', error);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !leaveType || !startDate || !endDate || !reason) return;
@@ -77,6 +96,8 @@ export default function LeavePage() {
         createdAt: Timestamp.now(),
       });
 
+      notifyAdminWhatsAppLeave(); // Trigger WhatsApp notification to admin
+      
       toast.success(t('leaveSubmitted'));
       resetForm();
       fetchLeaves();
